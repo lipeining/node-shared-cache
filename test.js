@@ -54,3 +54,30 @@ cache.release("test");
 console.log("release test", obj); // 
 values = cache.dump(obj, "foo");
 console.log("dump foo", values);
+
+const arr = [1, "a", true, false, undefined, null];
+const child = {
+  1: 1,
+  a: 1,
+  b: "b",
+  c: true,
+  d: false,
+  e: undefined,
+  f: null,
+};
+const parent = {
+  1: 1,
+  a: 1,
+  b: "b",
+  c: true,
+  d: false,
+  e: undefined,
+  f: null,
+  g: [1, ""],
+  arr,
+  o: child,
+};
+var jsont = new cache.Cache("jsont", 557056);
+jsont.v = parent;
+const jsonDump = cache.dump(jsont);
+console.log("json dump", jsonDump);

@@ -150,7 +150,7 @@ static NAN_PROPERTY_SETTER(setter) {
     PROPERTY_SCOPE(property, info.Holder(), ptr, fd, keyLen, keyBuf);
 
     Isolate* isolate = info.GetIsolate();
-    bson::BSONValue bsonValue(value, isolate);
+    bson::BSONValue bsonValue(value);
 
     FATALIF(cache::set(ptr, fd, keyBuf, keyLen, bsonValue.Data(), bsonValue.Length()), -1, cache::set);
     info.GetReturnValue().Set(value);
@@ -211,7 +211,7 @@ static NAN_METHOD(exchange) {
     Local<Context> context = isolate->GetCurrentContext();
     PROPERTY_SCOPE(info[1]->ToString(context).ToLocalChecked(), holder, ptr, fd, keyLen, keyBuf);
 
-    bson::BSONValue bsonValue(info[2], isolate);
+    bson::BSONValue bsonValue(info[2]);
 
     bson::BSONParser parser;
     FATALIF(cache::set(ptr, fd, keyBuf, keyLen, bsonValue.Data(), bsonValue.Length(), &parser.val, &parser.valLen), -1, cache::exchange);

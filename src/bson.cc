@@ -61,8 +61,9 @@ typedef struct writer_s {
         }
     }
 
-    void write(v8::Local<v8::Value> value, v8::Isolate* isolate) {
+    void write(v8::Local<v8::Value> value) {
         using namespace v8;
+        Isolate* isolate = Isolate::GetCurrent();
         Local<Context> context = isolate->GetCurrentContext();
         ensureCapacity(1);
         if(value->IsString()) {
@@ -113,7 +114,7 @@ typedef struct writer_s {
                 current += sizeof(uint32_t);
                 for(uint32_t i = 0; i < len; i++) {
                     // fprintf(stderr, "write array[%d] (len=%d)\n", i, len);
-                    write(arr->Get(context, i).ToLocalChecked(), isolate);
+                    write(arr->Get(context, i).ToLocalChecked());
                 }
             } else { // TODO: support for other object types
                 *(current++) = bson::Object;
@@ -124,8 +125,8 @@ typedef struct writer_s {
                 current += sizeof(uint32_t);
                 for(uint32_t i = 0; i < len; i++) {
                     Local<Value> name = names->Get(context, i).ToLocalChecked();
-                    write(name, isolate);
-                    write(obj->Get(context, name).ToLocalChecked(), isolate);
+                    write(name);
+                    write(obj->Get(context, name).ToLocalChecked());
                 }
             }
         } else {
@@ -135,10 +136,10 @@ typedef struct writer_s {
 
 } writer_t;
 
-bson::BSONValue::BSONValue(v8::Local<v8::Value> value, v8::Isolate* isolate) {
+bson::BSONValue::BSONValue(v8::Local<v8::Value> value) {
     
     writer_t writer(*this);
-    writer.write(value, isolate);
+    writer.write(value);
     // fprintf(stderr, "%d bytes used writing %s\n", writer.used, *Nan::Utf8String(value));
 
     pointer = writer.current - writer.used;
