@@ -32,7 +32,7 @@ using namespace v8;
     HANDLE fd = holder->GetInternalField(1)->Int32Value()
 #else
 #define METHOD_SCOPE(holder, ptr, fd) void* ptr = Nan::GetInternalFieldPointer(holder, 0);\
-    HANDLE fd = reinterpret_cast<HANDLE>(holder->GetInternalField(1)->IntegerValue())
+    HANDLE fd = reinterpret_cast<HANDLE>(holder->GetInternalField(1)->IntegerValue(Isolate::GetCurrent()->GetCurrentContext()).ToChecked())
 #endif
 
 #define PROPERTY_SCOPE(property, holder, ptr, fd, keyLen, keyBuf) int keyLen = property->Length();\
@@ -44,7 +44,7 @@ using namespace v8;
         return Nan::ThrowError("length of property name should not be greater than (block size - 32) / 2");\
     }\
     uint16_t keyBuf[256];\
-    property->Write(keyBuf)
+    property->Write(Isolate::GetCurrent(), keyBuf)
 
 
 static NAN_METHOD(release) {
@@ -57,9 +57,10 @@ static NAN_METHOD(create) {
     if(!info.IsConstructCall()) {
         return Nan::ThrowError("Illegal constructor");
     }
-
-    uint32_t size = info[1]->Uint32Value();
-    uint32_t block_size_shift = info[2]->Uint32Value();
+    Isolate* isolate = info.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
+    uint32_t size = info[1]->Uint32Value(context).ToChecked();
+    uint32_t block_size_shift = info[2]->Uint32Value(context).ToChecked();
     if(!block_size_shift || block_size_shift > 31) block_size_shift = 6;
 
     uint32_t blocks = size >> (5 + block_size_shift) << 5; // 32 aligned
@@ -148,7 +149,8 @@ static NAN_PROPERTY_GETTER(getter) {
 static NAN_PROPERTY_SETTER(setter) {
     PROPERTY_SCOPE(property, info.Holder(), ptr, fd, keyLen, keyBuf);
 
-    bson::BSONValue bsonValue(value);
+    Isolate* isolate = info.GetIsolate();
+    bson::BSONValue bsonValue(value, isolate);
 
     FATALIF(cache::set(ptr, fd, keyBuf, keyLen, bsonValue.Data(), bsonValue.Length()), -1, cache::set);
     info.GetReturnValue().Set(value);
@@ -160,7 +162,9 @@ public:
     Local<Array> keys;
 
     static void next(KeysEnumerator* self, uint16_t* key, size_t keyLen) {
-        self->keys->Set(self->length++, Nan::New<String>(key, keyLen).ToLocalChecked());
+        Isolate* isolate = Isolate::GetCurrent();
+        Local<Context> context = isolate->GetCurrentContext();
+        self->keys->Set(context, self->length++, Nan::New<String>(key, keyLen).ToLocalChecked());
     }
 
     inline KeysEnumerator() : length(0), keys(Nan::New<Array>()) {}
@@ -192,8 +196,10 @@ static NAN_PROPERTY_QUERY(querier) {
 // increase(holder, key, [by])
 static NAN_METHOD(increase) {
     Local<Object> holder = Local<Object>::Cast(info[0]);
-    PROPERTY_SCOPE(info[1]->ToString(), holder, ptr, fd, keyLen, keyBuf);
-    uint32_t increase_by = info.Length() > 2 ? info[2]->Uint32Value() : 1;
+    Isolate* isolate = info.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
+    PROPERTY_SCOPE(info[1]->ToString(context).ToLocalChecked(), holder, ptr, fd, keyLen, keyBuf);
+    uint32_t increase_by = info.Length() > 2 ? info[2]->Uint32Value(context).ToChecked() : 1;
     info.GetReturnValue().Set(cache::increase(ptr, fd, keyBuf, keyLen, increase_by));
 }
 
@@ -201,9 +207,11 @@ static NAN_METHOD(increase) {
 // exchanges current key with new value, the old value is returned
 static NAN_METHOD(exchange) {
     Local<Object> holder = Local<Object>::Cast(info[0]);
-    PROPERTY_SCOPE(info[1]->ToString(), holder, ptr, fd, keyLen, keyBuf);
+    Isolate* isolate = info.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
+    PROPERTY_SCOPE(info[1]->ToString(context).ToLocalChecked(), holder, ptr, fd, keyLen, keyBuf);
 
-    bson::BSONValue bsonValue(info[2]);
+    bson::BSONValue bsonValue(info[2], isolate);
 
     bson::BSONParser parser;
     FATALIF(cache::set(ptr, fd, keyBuf, keyLen, bsonValue.Data(), bsonValue.Length(), &parser.val, &parser.valLen), -1, cache::exchange);
@@ -216,7 +224,9 @@ static NAN_METHOD(exchange) {
 // fastGet(instance, key)
 static NAN_METHOD(fastGet) {
     Local<Object> holder = Local<Object>::Cast(info[0]);
-    PROPERTY_SCOPE(info[1]->ToString(), holder, ptr, fd, keyLen, keyBuf);
+    Isolate* isolate = info.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
+    PROPERTY_SCOPE(info[1]->ToString(context).ToLocalChecked(), holder, ptr, fd, keyLen, keyBuf);
 
     bson::BSONParser parser;
 
@@ -237,7 +247,9 @@ public:
         if(self->keyLen) {
             if(self->keyLen > keyLen || memcmp(self->key, key, self->keyLen << 1)) return;
         }
-        self->entries->Set(Nan::New<String>(key, keyLen).ToLocalChecked(), bson::parse(val));
+        Isolate* isolate = Isolate::GetCurrent();
+        Local<Context> context = isolate->GetCurrentContext();
+        self->entries->Set(context, Nan::New<String>(key, keyLen).ToLocalChecked(), bson::parse(val));
     }
 
     inline  EntriesDumper() : entries(Nan::New<Object>()), keyLen(0) {}
@@ -247,16 +259,18 @@ static NAN_METHOD(dump) {
     Local<Object> holder = Local<Object>::Cast(info[0]);
     METHOD_SCOPE(holder, ptr, fd);
     EntriesDumper dumper;
+    Isolate* isolate = info.GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
 
-    if(info.Length() > 1 && info[1]->BooleanValue()) {
-        Local<String> prefix = info[1]->ToString();
+    if(info.Length() > 1 && info[1]->BooleanValue(isolate)) {
+        Local<String> prefix = info[1]->ToString(context).ToLocalChecked();
         int keyLen = prefix->Length();
         if(keyLen > 256) {
             info.GetReturnValue().Set(dumper.entries);
             return;
         }
 
-        prefix->Write(dumper.key);
+        prefix->Write(isolate, dumper.key);
         dumper.keyLen = keyLen;
     }
 
@@ -271,14 +285,17 @@ static NAN_METHOD(clear) {
     cache::clear(ptr, fd);
 }
 
-void init(Handle<Object> exports) {
+void init(Local<Object> exports) {
 
     Local<FunctionTemplate> constructor = Nan::New<FunctionTemplate>(create);
     Local<ObjectTemplate> inst = constructor->InstanceTemplate();
     inst->SetInternalFieldCount(2); // ptr, fd (synchronization object)
     Nan::SetNamedPropertyHandler(inst, getter, setter, querier, deleter, enumerator);
     
-    Nan::Set(exports, Nan::New("Cache").ToLocalChecked(), constructor->GetFunction());
+    Isolate* isolate = exports->GetIsolate();
+    Local<Context> context = isolate->GetCurrentContext();
+
+    Nan::Set(exports, Nan::New("Cache").ToLocalChecked(), constructor->GetFunction(context).ToLocalChecked());
     Nan::SetMethod(exports, "release", release);
     Nan::SetMethod(exports, "increase", increase);
     Nan::SetMethod(exports, "exchange", exchange);

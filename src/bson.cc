@@ -4,11 +4,11 @@
 #include<string.h>
 
 typedef struct object_wrapper_s {
-    v8::Handle<v8::Object> object;
+    v8::Local<v8::Object> object;
     uint32_t index;
     object_wrapper_s* next;
 
-    object_wrapper_s(v8::Handle<v8::Object> obj, object_wrapper_s* curr) :
+    object_wrapper_s(v8::Local<v8::Object> obj, object_wrapper_s* curr) :
         object(obj), index(curr ? curr->index + 1 : 0), next(curr) {}
 } object_wrapper_t;
 
@@ -61,17 +61,18 @@ typedef struct writer_s {
         }
     }
 
-    void write(v8::Handle<v8::Value> value) {
+    void write(v8::Local<v8::Value> value, v8::Isolate* isolate) {
         using namespace v8;
+        Local<Context> context = isolate->GetCurrentContext();
         ensureCapacity(1);
         if(value->IsString()) {
             *(current++) = bson::String;
-            Local<String> str = value->ToString();
+            Local<String> str = value->ToString(context).ToLocalChecked();
             size_t len = str->Length() << 1;
             ensureCapacity(sizeof(uint32_t) + len);
             *reinterpret_cast<uint32_t*>(current) = len;
             current += sizeof(uint32_t);
-            str->Write(reinterpret_cast<uint16_t*>(current));
+            str->Write(isolate, reinterpret_cast<uint16_t*>(current));
             current += len;
         } else if(value->IsNull()) {
             *(current++) = bson::Null;
@@ -80,15 +81,15 @@ typedef struct writer_s {
         } else if(value->IsInt32()) {
             *(current++) = bson::Int32;
             ensureCapacity(sizeof(int32_t));
-            *reinterpret_cast<int32_t*>(current) = value->Int32Value();
+            *reinterpret_cast<int32_t*>(current) = value->Int32Value(context).ToChecked();
             current += sizeof(int32_t);
         } else if(value->IsNumber()) {
             *(current++) = bson::Number;
             ensureCapacity(sizeof(double));
-            *reinterpret_cast<double*>(current) = value->NumberValue();
+            *reinterpret_cast<double*>(current) = value->NumberValue(context).ToChecked();
             current += sizeof(double);
         } else if(value->IsObject()) {
-            Handle<Object> obj = value.As<Object>();
+            Local<Object> obj = value.As<Object>();
             // check if object has already been serialized
             object_wrapper_t* curr = objects;
             while(curr) {
@@ -105,26 +106,26 @@ typedef struct writer_s {
             objects = new object_wrapper_t(obj, objects);
             if(value->IsArray()) {
                 *(current++) = bson::Array;
-                Handle<Array> arr = obj.As<Array>();
+                Local<Array> arr = obj.As<Array>();
                 uint32_t len = arr->Length();
                 ensureCapacity(sizeof(uint32_t));
                 *reinterpret_cast<uint32_t*>(current) = len;
                 current += sizeof(uint32_t);
                 for(uint32_t i = 0; i < len; i++) {
                     // fprintf(stderr, "write array[%d] (len=%d)\n", i, len);
-                    write(arr->Get(i));
+                    write(arr->Get(context, i).ToLocalChecked(), isolate);
                 }
             } else { // TODO: support for other object types
                 *(current++) = bson::Object;
-                Local<Array> names = obj->GetOwnPropertyNames();
+                Local<Array> names = obj->GetOwnPropertyNames(context).ToLocalChecked();
                 uint32_t len = names->Length();
                 ensureCapacity(sizeof(uint32_t));
                 *reinterpret_cast<uint32_t*>(current) = len;
                 current += sizeof(uint32_t);
                 for(uint32_t i = 0; i < len; i++) {
-                    Local<Value> name = names->Get(i);
-                    write(name);
-                    write(obj->Get(name));
+                    Local<Value> name = names->Get(context, i).ToLocalChecked();
+                    write(name, isolate);
+                    write(obj->Get(context, name).ToLocalChecked(), isolate);
                 }
             }
         } else {
@@ -134,10 +135,10 @@ typedef struct writer_s {
 
 } writer_t;
 
-bson::BSONValue::BSONValue(v8::Handle<v8::Value> value) {
+bson::BSONValue::BSONValue(v8::Local<v8::Value> value, v8::Isolate* isolate) {
     
     writer_t writer(*this);
-    writer.write(value);
+    writer.write(value, isolate);
     // fprintf(stderr, "%d bytes used writing %s\n", writer.used, *Nan::Utf8String(value));
 
     pointer = writer.current - writer.used;
@@ -153,6 +154,8 @@ bson::BSONValue::~BSONValue() {
 
 static v8::Local<v8::Value> parse(const uint8_t*& data, object_wrapper_t*& objects) {
     using namespace v8;
+    Isolate* isolate = Isolate::GetCurrent();
+    Local<Context> context = isolate->GetCurrentContext();
     uint32_t len;
     const uint8_t* tmp;
     switch(*(data++)) {
@@ -176,11 +179,16 @@ static v8::Local<v8::Value> parse(const uint8_t*& data, object_wrapper_t*& objec
         len = *reinterpret_cast<const uint32_t*>(data);
         tmp = data += sizeof(uint32_t);
         data += len;
-#if (NODE_MODULE_VERSION > NODE_0_10_MODULE_VERSION)
-        return v8::String::NewFromTwoByte(Isolate::GetCurrent(), reinterpret_cast<const uint16_t*>(tmp), v8::String::kNormalString, len >> 1);
-#else
-        return v8::String::New(reinterpret_cast<const uint16_t*>(tmp), len >> 1);
-#endif
+// #if (NODE_MODULE_VERSION > NODE_0_10_MODULE_VERSION)
+//         return v8::String::NewFromTwoByte(Isolate::GetCurrent(), reinterpret_cast<const uint16_t*>(tmp), v8::String::kNormalString, len >> 1);
+// #else
+//         return v8::String::New(isolate, reinterpret_cast<const uint16_t*>(tmp), len >> 1).ToLocalChecked();
+// #endif
+// #if (NODE_MODULE_VERSION > NODE_0_10_MODULE_VERSION)
+//         return v8::String::NewFromTwoByte(Isolate::GetCurrent(), reinterpret_cast<const uint16_t*>(tmp), v8::String::kNormalString, len >> 1);
+// #else
+        return v8::String::NewFromTwoByte(isolate, reinterpret_cast<const uint16_t*>(tmp), v8::NewStringType::kNormal, len >> 1).ToLocalChecked();
+// #endif
     case bson::Array:
         len = *reinterpret_cast<const uint32_t*>(data);
         data += sizeof(uint32_t);
@@ -189,7 +197,7 @@ static v8::Local<v8::Value> parse(const uint8_t*& data, object_wrapper_t*& objec
             objects = new object_wrapper_t(arr, objects);
 
             for(uint32_t i = 0; i < len; i++) {
-                arr->Set(i, parse(data, objects));
+                arr->Set(context,i, parse(data, objects));
             }
             return arr;
         }
@@ -201,8 +209,8 @@ static v8::Local<v8::Value> parse(const uint8_t*& data, object_wrapper_t*& objec
             objects = new object_wrapper_t(obj, objects);
 
             for(uint32_t i = 0; i < len; i++) {
-                Handle<Value> name = parse(data, objects);
-                obj->Set(name, parse(data, objects));
+                Local<Value> name = parse(data, objects);
+                obj->Set(context, name, parse(data, objects));
             }
             return obj;
         }
