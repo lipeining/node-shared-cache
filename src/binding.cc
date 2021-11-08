@@ -29,7 +29,7 @@ using namespace v8;
 
 #ifndef _WIN32
 #define METHOD_SCOPE(holder, ptr, fd) void* ptr = Nan::GetInternalFieldPointer(holder, 0);\
-    HANDLE fd = holder->GetInternalField(1)->Int32Value()
+    HANDLE fd = holder->GetInternalField(1)->Int32Value(Isolate::GetCurrent()->GetCurrentContext()).ToChecked()
 #else
 #define METHOD_SCOPE(holder, ptr, fd) void* ptr = Nan::GetInternalFieldPointer(holder, 0);\
     HANDLE fd = reinterpret_cast<HANDLE>(holder->GetInternalField(1)->IntegerValue(Isolate::GetCurrent()->GetCurrentContext()).ToChecked())
@@ -49,7 +49,7 @@ using namespace v8;
 
 static NAN_METHOD(release) {
 #ifndef _WIN32
-    FATALIF(shm_unlink(*String::Utf8Value(info[0])), -1, shm_unlink);
+    FATALIF(shm_unlink(*String::Utf8Value(Isolate::GetCurrent(), info[0])), -1, shm_unlink);
 #endif
 }
 
@@ -149,7 +149,6 @@ static NAN_PROPERTY_GETTER(getter) {
 static NAN_PROPERTY_SETTER(setter) {
     PROPERTY_SCOPE(property, info.Holder(), ptr, fd, keyLen, keyBuf);
 
-    Isolate* isolate = info.GetIsolate();
     bson::BSONValue bsonValue(value);
 
     FATALIF(cache::set(ptr, fd, keyBuf, keyLen, bsonValue.Data(), bsonValue.Length()), -1, cache::set);
